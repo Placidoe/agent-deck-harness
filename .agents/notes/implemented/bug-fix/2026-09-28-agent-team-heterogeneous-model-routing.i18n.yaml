@@ -1,0 +1,34 @@
+# Bilingual-pair consistency record for 2026-09-28-agent-team-heterogeneous-model-routing.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-28-agent-team-heterogeneous-model-routing.md
+/agent-note-agent-team-heterogeneous-model-routing:
+  en: bccf6121e9511e11
+  zh: 741e17ed8b085743
+/agent-note-agent-team-heterogeneous-model-routing/problem:
+  en: 18516bf271e4a0dc
+  zh: 025badc54e7dcbfc
+/agent-note-agent-team-heterogeneous-model-routing/decision:
+  en: 4748d55ce564af0f
+  zh: 633f871239d0985f
+/agent-note-agent-team-heterogeneous-model-routing/architecture:
+  en: 98acfa709b14c4c6
+  zh: 03fe58c9f195324a
+/agent-note-agent-team-heterogeneous-model-routing/request-flow:
+  en: a3ce817616532a18
+  zh: 70fef7b441600256
+/agent-note-agent-team-heterogeneous-model-routing/validation-and-failure-semantics:
+  en: 1f60c8679159ecc1
+  zh: 9b26983fd291b4e4
+/agent-note-agent-team-heterogeneous-model-routing/persistence-and-recovery:
+  en: f300f05fde607df5
+  zh: ba1a1c65f4d59bf3
+/agent-note-agent-team-heterogeneous-model-routing/verification:
+  en: 2376238a8238737c
+  zh: 8f2dfcf0801294a2
+/agent-note-agent-team-heterogeneous-model-routing/alternatives-considered:
+  en: 3ddf5777f59dc3ec
+  zh: 1207009c856c3e93
+/agent-note-agent-team-heterogeneous-model-routing/consequences:
+  en: bd06362b82443793
+  zh: 1a8bfde99bc64d9d

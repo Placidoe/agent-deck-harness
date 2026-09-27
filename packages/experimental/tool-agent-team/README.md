@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-This package lets the model create named teammates, send them messages, inspect availability, wait for progress, interrupt stuck work, and coordinate through a shared task board. Every team member receives the same nine Team tools and guidance for coordinating in a shared workspace. An opt-in model-selection setting also lets the Lead discover an allowlisted LLM catalog and route each teammate to a different provider, model, or reasoning effort. Choose it when the model should operate a team only after you explicitly request one. It replaces legacy subagent controls with the same tool names, so compositions that need both must disable the legacy definitions. The package is published under its experimental name and provides no stability guarantee.
+This package lets the model create named teammates, send messages, inspect availability, wait, interrupt stuck work, and coordinate a shared task board. Every member receives the same nine Team tools and shared-workspace guidance. An opt-in setting lets the Lead discover an allowlisted LLM catalog and route teammates to different providers, models, or reasoning efforts. Choose it only when users explicitly request a team. It replaces legacy subagent controls with the same names, so compositions that need both must disable legacy definitions. The package is experimental and provides no stability guarantee.
 
 ## Table of Contents
 
