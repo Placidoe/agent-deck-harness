@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-本包让模型创建具名 teammate、向它们发送消息、查看可用状态、等待进展、中断卡住的工作，并通过共享任务板协调。每个团队成员都会获得相同的九个工具，以及在共享工作区协调的指引。当模型只应在你明确要求后运行团队时，选择本包。它会取代同名的旧版 subagent 控件，因此同时需要两者的组合必须禁用旧定义。本包以实验性名称公开发布，但不提供稳定性保证。
+本包让模型创建具名 teammate、向它们发送消息、查看可用状态、等待进展、中断卡住的工作，并通过共享任务板协调。每个团队成员都会获得相同的九个 Team 工具，以及在共享工作区协调的指引。可选的模型选择设置还允许 Lead 发现白名单中的 LLM 目录，并把每个 teammate 路由到不同的提供方、模型或推理强度。当模型只应在你明确要求后运行团队时，选择本包。它会取代同名的旧版 subagent 控件，因此同时需要两者的组合必须禁用旧定义。本包以实验性名称公开发布，但不提供稳定性保证。
 
 ## 目录
 
@@ -41,12 +41,16 @@ kind: "package-reference"
   config:
     freshProvider: spawn
     forkProvider: fork
+    modelSelectionSettings: true
 ```
 
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `freshProvider` | `spawn` | 启动 fresh teammate 的提供方 |
 | `forkProvider` | `fork` | 启动 fork teammate 的提供方 |
+| `modelSelectionSettings` | `false` | 为每个新 Team Session 采样 Host 所拥有的白名单，并在启用时暴露模型发现与选择能力 |
+
+`freshProvider` 与 `forkProvider` 命名的是 continuable-subagent runtime，并不是 LLM 厂商。使用 `modelSelectionSettings: true` 时，需要在 Host scope 挂载 `@deepseek-ai/dsh-tool-subagent/model-selection-settings`。当该设置已启用并包含精确的 provider/model 对时，Team Session 会获得 `list_subagent_models`，而 `spawn_teammate` 会获得 `provider`、`model` 与 `reasoning_effort`。省略这些字段会继承 Lead 的兼容路由。显式提供路由时，会在 roster 发生任何变更之前校验 Session 白名单、runtime 能力、已注册的 LLM adapter、精确模型与推理强度。解析后的路由会持久化到 child descriptor，并在冷恢复后继续使用。
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-experimental-tool-agent-team)是每个受支持字段及其 JSDoc 的穷尽式真源。
 
@@ -56,7 +60,7 @@ kind: "package-reference"
 
 九个工具分为四类能力：
 
-- **创建 teammate**——`spawn_teammate` 接收名字、描述与初始任务；只有 Lead 可以调用它。
+- **创建 teammate**——`spawn_teammate` 接收名字、描述与初始任务；只有 Lead 可以调用它。在已启用模型选择的 Session 中，Lead 会先使用 `list_subagent_models`，并可为该 teammate 提供白名单内的 LLM provider/model/effort。
 - **发送消息**——`send_message` 在最近的步骤边界对运行中的成员进行 steering（中途引导）、启动或恢复非活动成员。
 - **查看与等待**——`list_agents` 返回各成员的 `target` 与可用状态；`wait_agent` 等待下一次团队变化；`interrupt_agent` 停止 teammate 的当前轮次（仅限 Lead）。
 - **管理任务板**——`team_task_create`、`team_task_list`、`team_task_get` 与 `team_task_update` 添加、浏览、读取与更新共享任务。
@@ -65,7 +69,7 @@ kind: "package-reference"
 
 ### 成功与失败的表现
 
-发送消息在安全存储后即成功：结果为 `accepted`（已立即送达）或 `queued`（等待中），排队的消息绝不能重发。当没有其他成员 running 或 provisioning 时，`wait_agent` 会立即返回 `noProgress`，提示调用方先唤醒 teammate；否则它会等待下一次变化，调用方随后重新读取状态。基于过期 revision 的任务编辑会被拒绝，而不是覆盖更新的成果。
+发送消息在安全存储后即成功：结果为 `accepted`（已立即送达）或 `queued`（等待中），排队的消息绝不能重发。显式 teammate 路由在 provider/model 不完整、超出 Session 白名单、不可用或所选 runtime 不支持时，会在创建成员之前失败。当没有其他成员 running 或 provisioning 时，`wait_agent` 会立即返回 `noProgress`，提示调用方先唤醒 teammate；否则它会等待下一次变化，调用方随后重新读取状态。基于过期 revision 的任务编辑会被拒绝，而不是覆盖更新的成果。
 
 -----
 
@@ -84,6 +88,7 @@ kind: "package-reference"
 - **按作用域，而非全局。** 每个注册都位于成员 Agent（智能体）自己的 `ctx` 上；安装依据 Agent 发布时可用的成员身份。
 - **声明式结果，紧凑 JSON。** 每个工具都声明完整结果 schema，并把该值渲染为紧凑 JSON，因此编译器会对照向模型承诺的结果检查 `execute`，任何结果都不会在缩进上消耗 token。
 - **领域掌握裁决权。** 工具委托给 `ctx.agentTeams`，后者强制执行 Lead 权限与 revision 校验；适配器不添加更弱的路径。
+- **只有一套路由策略。** Team delegation 复用普通 subagent 的白名单、发现、预检与逐 Session 持久化，不维护第二套模型选择权限。
 
 [Agent Teams Agent Note](../../../.agents/notes/implemented/feature/2026-08-05-agent-teams.zh.md)负责模型侧与 scoping 决策。
 
@@ -96,7 +101,7 @@ kind: "package-reference"
 
 ### 策略与工具
 
-member scope 上的一个 `team:policy` 段落说明共享的协作规则；固定文本与九个工具注册都声明在 [`src/index.ts`](src/index.ts)。九个工具 schema 注册在发布时被识别为 Team member 的 scope 中。与旧全局 continuable-subagent 控件同名的 scoped 注册只会为团队成员覆盖这些全局控件。
+member scope 上的一个 `team:policy` 段落说明共享的协作规则；固定文本与九个 Team 工具注册都声明在 [`src/index.ts`](src/index.ts)。可选择模型的 Session 还会获得共享的 `list_subagent_models` 发现工具，以及 `spawn_teammate` 上的三个选择字段。这些 schema 注册在发布时被识别为 Team member 的 scope 中。与旧全局 continuable-subagent 控件同名的 scoped 注册只会为团队成员覆盖这些全局控件。
 
 ### 按作用域注册与拆除
 
@@ -125,11 +130,11 @@ member scope 上的一个 `team:policy` 段落说明共享的协作规则；固�
 
 #### 模型看到什么
 
-一段共享 system 策略会说明显式 delegation 要求、共享 cwd 行为、文件陈旧版本恢复、Bash／formatter／codegen 风险、task／write-scope 协调、Steer 投递、mailbox 不重试规则，以及 Lead 必须在回答前等待。Lead 与 teammate 的全部九个 Team schema 相同；执行时检查仅限 Lead 的操作权限。`spawn_teammate` 在初始 user 消息前加上 `<system-reminder>\nYou are teammate "<name>".\nYour Team Lead is named "lead".\nUse list_agents({}) to find your teammates and their names.\nTo message your Team Lead, use send_message({ target: "lead", message: "..." }).\nTo message another teammate, use send_message({ target: "<teammate name>", message: "..." }).\n</system-reminder>`，接着是一个空行和任务。该前缀不含 Team id，禁用运行时上下文时也能生效。fork 继承历史，不额外添加 Lead 身份消息。
+一段共享 system 策略会说明显式 delegation 要求、共享 cwd 行为、文件陈旧版本恢复、Bash／formatter／codegen 风险、task／write-scope 协调、Steer 投递、mailbox 不重试规则，以及 Lead 必须在回答前等待。Lead 与 teammate 的全部九个 Team schema 相同；执行时检查仅限 Lead 的操作权限。在可选择模型的 Session 中，策略会要求 Lead 先发现精确路由 id，而不是猜测；Team schema 会增加一个发现工具与可选路由字段。`spawn_teammate` 在初始 user 消息前加上 `<system-reminder>\nYou are teammate "<name>".\nYour Team Lead is named "lead".\nUse list_agents({}) to find your teammates and their names.\nTo message your Team Lead, use send_message({ target: "lead", message: "..." }).\nTo message another teammate, use send_message({ target: "<teammate name>", message: "..." }).\n</system-reminder>`，接着是一个空行和任务。该前缀不含 Team id，禁用运行时上下文时也能生效。fork 继承历史，不额外添加 Lead 身份消息。
 
 #### Token 影响
 
-每次 Team member 请求都有固定策略与 schema 成本。初始身份文本随普通历史经历后续步骤、冷恢复和压缩；插件不扫描或重新插入它。工具调用会增加紧凑 JSON roster、task、wait 或 receipt 结果。Peer 内容由 Team 领域保留在 target 历史中。
+每次 Team member 请求都有固定策略与 schema 成本。启用模型选择会增加三个较小的 `spawn_teammate` 字段与一个发现 schema；只有模型实际调用发现工具时才会花费目录文本。初始身份文本随普通历史经历后续步骤、冷恢复和压缩；插件不扫描或重新插入它。工具调用会增加紧凑 JSON roster、task、wait 或 receipt 结果。Peer 内容由 Team 领域保留在 target 历史中。
 
 #### KV Cache 影响
 

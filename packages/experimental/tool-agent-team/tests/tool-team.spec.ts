@@ -16,6 +16,7 @@ import * as SubagentFork from '@deepseek-ai/dsh-subagent-fork-in-process'
 import * as SubagentSpawn from '@deepseek-ai/dsh-subagent-spawn-in-process'
 import { renderPrompt, renderContextSnapshot } from '@deepseek-ai/dsh-system-prompt'
 import * as ToolSubagentControl from '@deepseek-ai/dsh-tool-subagent-control'
+import SubagentModelSelectionConfig from '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import { resolveAdapterOptions } from '@deepseek-ai/dsh-llm-deepseek'
 import { serialize } from '@deepseek-ai/dsh-llm-deepseek/src/serialize.ts'
@@ -63,7 +64,11 @@ afterEach(async () => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 
-async function setup(script: ConstructorParameters<typeof MockAdapter>[0], legacyControl = false) {
+async function setup(
+  script: ConstructorParameters<typeof MockAdapter>[0],
+  legacyControl = false,
+  allowedModels?: Array<{ provider: string; model: string }>,
+) {
   const ctx = new Context()
   contexts.add(ctx)
   await mountAgentLoopTestDependencies(ctx)
@@ -77,7 +82,12 @@ async function setup(script: ConstructorParameters<typeof MockAdapter>[0], legac
   await ctx.plugin(SubagentSpawn, { providerName: 'spawn' })
   await ctx.plugin(SubagentFork, { providerName: 'fork' })
   await ctx.plugin(TeamService)
-  const fiber = await ctx.plugin(toolTeam)
+  if (allowedModels !== undefined) {
+    await ctx.plugin(SubagentModelSelectionConfig, { enabled: true, allowedModels })
+  }
+  const fiber = await ctx.plugin(toolTeam, {
+    modelSelectionSettings: allowedModels !== undefined,
+  })
   const adapter = new MockAdapter(script)
   ctx.llm.registerAdapter(['mock'], adapter)
   const lead = await ctx.agentLoop.create(SessionId('tool-team-lead'), { provider: 'mock', model: 'mock' })
@@ -135,6 +145,80 @@ async function waitNoAgent(ctx: Context, id: SessionId): Promise<void> {
 }
 
 describe('dsh-tool-team', () => {
+  it('routes a teammate through an explicitly allowed provider and model', async () => {
+    const { ctx, lead } = await setup([], false, [{ provider: 'beta', model: 'worker-model' }])
+    const workerAdapter = new MockAdapter([textResponse('worker answer')])
+    ctx.llm.registerAdapter(['beta'], workerAdapter)
+
+    const schemas = ctx.tools.schemas(lead)
+    const spawnSchema = schemas.find(schema => schema.name === 'spawn_teammate')
+    expect(spawnSchema?.parameters.properties).toMatchObject({
+      provider: { type: 'string' },
+      model: { type: 'string' },
+      reasoning_effort: { type: 'string' },
+    })
+    expect(schemas.some(schema => schema.name === 'list_subagent_models')).toBe(true)
+
+    const spawned = await execute(ctx, lead, 'spawn_teammate', {
+      name: 'beta-worker',
+      description: 'run on beta',
+      prompt: 'finish on beta',
+      provider: 'beta',
+      model: 'worker-model',
+    })
+    expect(spawned.isError).toBe(false)
+    const childId = spawnedChildId(ctx, lead, spawned)
+    await vi.waitFor(() => { expect(workerAdapter.requests).toHaveLength(1) }, { timeout: 5_000 })
+    expect(workerAdapter.requests[0]).toMatchObject({
+      sessionId: childId,
+      model: 'worker-model',
+    })
+    await waitNoAgent(ctx, childId)
+  })
+
+  it('rejects a teammate route outside the Session allowlist before roster mutation', async () => {
+    const { ctx, lead } = await setup([], false, [{ provider: 'beta', model: 'worker-model' }])
+    ctx.llm.registerAdapter(['beta'], new MockAdapter([]))
+
+    const result = await execute(ctx, lead, 'spawn_teammate', {
+      name: 'forbidden-worker',
+      description: 'must not start',
+      prompt: 'do not run',
+      provider: 'beta',
+      model: 'other-model',
+    })
+
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('is not allowed for this Session')
+    expect(ctx.agentTeams.listMembers(lead).map(member => member.name)).toEqual(['lead'])
+  })
+
+  it('rejects an incomplete teammate route before roster mutation', async () => {
+    const { ctx, lead } = await setup([], false, [{ provider: 'beta', model: 'worker-model' }])
+    ctx.llm.registerAdapter(['beta'], new MockAdapter([]))
+
+    const result = await execute(ctx, lead, 'spawn_teammate', {
+      name: 'incomplete-worker',
+      description: 'must not start',
+      prompt: 'do not run',
+      provider: 'beta',
+    })
+
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('`provider` and `model` must be supplied together')
+    expect(ctx.agentTeams.listMembers(lead).map(member => member.name)).toEqual(['lead'])
+  })
+
+  it('keeps fixed-route Team schemas unchanged when model selection is disabled', async () => {
+    const { ctx, lead } = await setup([])
+    const schemas = ctx.tools.schemas(lead)
+    const spawnSchema = schemas.find(schema => schema.name === 'spawn_teammate')
+    expect(spawnSchema?.parameters.properties).not.toHaveProperty('provider')
+    expect(spawnSchema?.parameters.properties).not.toHaveProperty('model')
+    expect(spawnSchema?.parameters.properties).not.toHaveProperty('reasoning_effort')
+    expect(schemas.some(schema => schema.name === 'list_subagent_models')).toBe(false)
+  })
+
   it.each(['running', 'inactive', 'provisioning', 'failed'] as const)(
     'projects %s members consistently in creation, listing, and schemas', async (status) => {
       const { ctx, lead } = await setup([])
@@ -709,6 +793,40 @@ describe('dsh-tool-team', () => {
     await vi.waitFor(() => { expect(ctx.agents.get(childId)).toBeUndefined() }, { timeout: 5_000 })
   })
 
+  it('preserves an explicit teammate route across cold resume', async () => {
+    const { ctx, lead, adapter } = await setup(
+      [textResponse('lead received settlement')],
+      false,
+      [{ provider: 'beta', model: 'worker-model' }],
+    )
+    const workerAdapter = new MockAdapter([textResponse('first'), 'hang'])
+    ctx.llm.registerAdapter(['beta'], workerAdapter)
+    const spawned = await execute(ctx, lead, 'spawn_teammate', {
+      name: 'routed-cold-worker',
+      description: 'cold worker on beta',
+      prompt: 'finish once',
+      provider: 'beta',
+      model: 'worker-model',
+    })
+    const childId = spawnedChildId(ctx, lead, spawned)
+    await waitNoAgent(ctx, childId)
+    await vi.waitFor(() => {
+      expect(adapter.requests.filter(request => request.sessionId === lead.id)).toHaveLength(1)
+    })
+    await lead.whenIdle()
+
+    const receipt = await ctx.agentTeams.sendMessage(lead, {
+      target: 'routed-cold-worker',
+      content: [{ type: 'text', text: 'resume on the same route' }],
+      signal: SIGNAL,
+    })
+    expect(receipt.status).toBe('accepted')
+    await vi.waitFor(() => { expect(workerAdapter.requests).toHaveLength(2) })
+    expect(workerAdapter.requests.map(request => request.model)).toEqual(['worker-model', 'worker-model'])
+    await execute(ctx, lead, 'interrupt_agent', { target: 'routed-cold-worker' })
+    await waitNoAgent(ctx, childId)
+  })
+
   it('fails safely without a calling Agent and has the function-plugin export shape', async () => {
     const { ctx } = await setup([])
     const result = await execute(ctx, undefined, 'list_agents', {})
@@ -716,7 +834,14 @@ describe('dsh-tool-team', () => {
     expect(text(result)).toContain('unknown tool "list_agents"')
     expect('default' in toolTeam).toBe(false)
     expect(toolTeam.name).toBe('tool-agent-team')
-    expect(toolTeam.inject).toEqual(['agents', 'agentTeams', 'tools', 'systemPrompt'])
+    expect(toolTeam.inject).toEqual([
+      'agents',
+      'agentTeams',
+      'subagents',
+      'sessionProjections',
+      'tools',
+      'systemPrompt',
+    ])
   })
 
   it('uses configured fresh and fork provider names', async () => {

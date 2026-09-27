@@ -16,7 +16,6 @@ import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
-import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
 import {
   assertSubagentMaxDepth,
@@ -34,11 +33,10 @@ import {
 } from './model-selection.ts'
 import type { DelegationModelRequest, ModelSelectionPolicy } from './model-selection.ts'
 import { registerListSubagentModels } from './list-models.ts'
+import { captureSubagentModelSelectionPolicy } from './model-selection-session.ts'
 import type {} from './model-selection-settings.ts'
 import {
-  recordSubagentModelSelection,
   subagentModelSelectionProjectionDefinition,
-  subagentModelSelectionPolicy,
 } from './model-selection-state.ts'
 
 export const name = 'tool-subagent'
@@ -618,32 +616,14 @@ export function apply(ctx: Context, config: Config, session?: Session): void {
     )
   }
   const selectForSession = (target: Session): ModelSelectionPolicy | undefined => {
-    const freshSession = target.firstLiveSeq === 0
-      // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
-      && target.eventAt(SessionSeq(0))?.type !== 'session/end-seed'
-    let allowedModels = subagentModelSelectionPolicy(ctx.sessionProjections, target)
-    if (allowedModels === undefined) {
-      const parentId = target.header.origin === 'subagent'
-        ? target.header.parentSession
-        : undefined
-      if (parentId !== undefined) {
-        const sessions = ctx.get('sessions')
-        if (sessions === undefined) {
-          throw new Error('tool-subagent: child model-selection inheritance requires the Session registry')
-        }
-        const parent = sessions.get(parentId)
-        allowedModels = parent === undefined
-          ? undefined
-          : subagentModelSelectionPolicy(ctx.sessionProjections, parent)
-      } else if (freshSession) {
-        const current = settings.current()
-        allowedModels = current.enabled ? current.allowedModels : undefined
+    try {
+      return captureSubagentModelSelectionPolicy(ctx, target, settings)
+    } catch (error: unknown) {
+      if (error instanceof Error && error.message === 'child model-selection inheritance requires the Session registry') {
+        throw new Error(`tool-subagent: ${error.message}`, { cause: error })
       }
+      throw error
     }
-    if (allowedModels !== undefined) {
-      recordSubagentModelSelection(ctx.sessionProjections, target, allowedModels)
-    }
-    return allowedModels === undefined ? undefined : { routes: allowedModels }
   }
 
   if (session !== undefined) {

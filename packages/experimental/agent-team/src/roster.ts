@@ -6,7 +6,7 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { MessageId } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import { foldSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
+import { foldSubagentDescriptor, parentAgentOptionsForDelegation } from '@deepseek-ai/dsh-subagent'
 import type { ContinuableStart } from '@deepseek-ai/dsh-subagent'
 import { errorMessage, TeamError } from './error.ts'
 import type { TeamJournal } from './journal.ts'
@@ -129,17 +129,18 @@ export class TeamRoster {
   list(membership: TeamMembership): TeamMemberView[] {
     const { root } = membership
     const state = this.journal.state(root)
+    const rootOptions = parentAgentOptionsForDelegation(root)
     const result: TeamMemberView[] = [{
       id: root.id,
       name: 'lead',
       role: 'lead',
       status: availability(root),
-      ...root.options.model === undefined ? {} : { model: root.options.model },
+      ...rootOptions.model === undefined ? {} : { model: rootOptions.model },
       diagnostics: [],
     }]
     for (const member of state.members) {
       const live = this.ctx.agents.get(member.id)
-      const model = live?.options.model ?? root.options.model
+      const model = this.memberModel(member.id)
       result.push({
         id: member.id,
         name: member.name,
@@ -286,6 +287,7 @@ export class TeamRoster {
         request: {
           prompt: request.prompt,
           parent: root,
+          ...request.agentOptions === undefined ? {} : { agentOptions: request.agentOptions },
         },
         signal,
       })
@@ -436,6 +438,7 @@ export class TeamRoster {
   /** Build one runtime member row after successful creation. */
   private memberView(member: TeamMemberSnapshot & { readonly phase: 'active' }): TeamMemberView {
     const live = this.ctx.agents.get(member.id)
+    const model = this.memberModel(member.id)
     return {
       id: member.id,
       name: member.name,
@@ -444,9 +447,15 @@ export class TeamRoster {
       description: member.description,
       provider: member.provider,
       context: member.context,
-      ...live?.options.model === undefined ? {} : { model: live.options.model },
+      ...model === undefined ? {} : { model },
       diagnostics: [],
     }
+  }
+
+  /** Read a teammate's currently loaded host-Agent model. */
+  private memberModel(memberId: SessionId): string | undefined {
+    const live = this.ctx.agents.get(memberId)
+    return live === undefined ? undefined : parentAgentOptionsForDelegation(live).model
   }
 
   /** Validate a never-reused model-facing teammate name. */

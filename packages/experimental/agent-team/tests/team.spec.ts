@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -112,7 +113,7 @@ function spawn(
   ctx: Context,
   lead: Agent,
   name: string,
-  options: { context?: 'fresh' | 'fork'; provider?: string } = {},
+  options: { context?: 'fresh' | 'fork'; provider?: string; agentOptions?: AgentOptions } = {},
 ) {
   const context = options.context ?? 'fresh'
   return ctx.agentTeams.spawnTeammate(lead, {
@@ -120,6 +121,7 @@ function spawn(
     description: `${name} responsibility`,
     prompt: content(`${name} initial`),
     context,
+    ...options.agentOptions === undefined ? {} : { agentOptions: options.agentOptions },
     provider: options.provider ?? (context === 'fork' ? 'fork' : 'spawn'),
     signal: SIGNAL,
   })
@@ -230,6 +232,22 @@ describe('Team identity and provisioning', () => {
     ])
     await expect(spawn(ctx, lead, 'third-worker')).rejects.toMatchObject({ code: 'TEAM_MEMBER_LIMIT' })
     await expect(spawn(ctx, lead, 'fresh-worker')).rejects.toMatchObject({ code: 'TEAM_MEMBER_NAME_TAKEN' })
+  })
+
+  it('passes an explicit teammate LLM route to the continuable child runtime', async () => {
+    const { ctx, lead } = await setup([textResponse('routed answer')])
+    const start = ctx.subagents.startContinuable.bind(ctx.subagents)
+    const startSpy = vi.spyOn(ctx.subagents, 'startContinuable').mockImplementation(async spec => await start(spec))
+
+    const started = await spawn(ctx, lead, 'routed-worker', {
+      agentOptions: { provider: 'mock', model: 'worker-model' },
+    })
+
+    const [spec] = startSpy.mock.calls.at(-1)!
+    expect(spec.provider).toBe('spawn')
+    expect(spec.request.parent).toBe(lead)
+    expect(spec.request.agentOptions).toEqual({ provider: 'mock', model: 'worker-model' })
+    await waitNoAgent(ctx, started.member.id)
   })
 
   it('flushes the accepted child prompt before committing the active roster edge', async () => {
